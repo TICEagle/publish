@@ -25,6 +25,8 @@ jobs:
           python=$(command -v python || command -v python3)
           "$python" test/fake_api.py > "$RUNNER_TEMP/requests" &
           curl -fsS --retry 30 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:8787/ready
+          PORT=8788 STATUS=held "$python" test/fake_api.py > "$RUNNER_TEMP/held-requests" &
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:8788/ready
       - id: token
         uses: ./
         with:
@@ -38,14 +40,22 @@ jobs:
           version: 1.0.0
           working-directory: test
           api-url: http://127.0.0.1:8787
+      - id: held
+        uses: ./
+        with:
+          version: 1.0.0
+          working-directory: test
+          api-url: http://127.0.0.1:8788
+          token: ceagle_TEST
       - shell: bash
         env:
+          HELD_STATUS: ${{ steps.held.outputs.status }}
           TOKEN_STATUS: ${{ steps.token.outputs.status }}
           TOKEN_URL: ${{ steps.token.outputs.url }}
           OIDC_STATUS: ${{ steps.oidc.outputs.status }}
         run: |
           cat "$RUNNER_TEMP/requests"
-          [[ $TOKEN_STATUS == published && $OIDC_STATUS == published ]]
+          [[ $TOKEN_STATUS == published && $OIDC_STATUS == published && $HELD_STATUS == under_review ]]
           [[ $TOKEN_URL == http://127.0.0.1:8787/p/selftest/1.0.0 ]]
           grep -q "Bearer ceagle_TEST" "$RUNNER_TEMP/requests"
           grep -q "POST /api/v1/oidc/github/exchange" "$RUNNER_TEMP/requests"
