@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -48,4 +49,5 @@ jobs:
           [[ $TOKEN_URL == http://127.0.0.1:8787/p/selftest/1.0.0 ]]
           grep -q "Bearer ceagle_TEST" "$RUNNER_TEMP/requests"
           grep -q "POST /api/v1/oidc/github/exchange" "$RUNNER_TEMP/requests"
-          grep -q "Bearer ceagle_OIDC" "$RUNNER_TEMP/requests"
+          grep -q "Bearer ceagle_OIDC attestation" "$RUNNER_TEMP/requests"
+          [[ $(grep -c "Bearer ceagle_TEST attestation" "$RUNNER_TEMP/requests" || true) == 0 ]]

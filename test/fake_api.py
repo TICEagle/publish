@@ -21,8 +21,9 @@ class FakeCEagle(BaseHTTPRequestHandler):
         self.answer(200, {"value": "github-jwt"})
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        print("POST", self.path, self.headers.get("Authorization"), flush=True)
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        attested = b'name="attestation"' in body and b'"dsseEnvelope"' in body
+        print("POST", self.path, self.headers.get("Authorization"), "attestation" if attested else "", flush=True)
         if self.path == EXCHANGE_PATH:
             self.answer(200, {"token": "ceagle_OIDC", "project": "selftest", "expires_at": "2030-01-01T00:00:00Z"})
         else:

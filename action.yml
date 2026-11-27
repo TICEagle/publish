@@ -19,11 +19,15 @@ inputs:
   cli-version:
     description: Version of the ceagle CLI to run, one this action has a pinned sha256 for
     required: false
-    default: 1.0.0
+    default: 1.1.0
   token:
     description: CEagle API token. Leave it empty to use trusted publishing, which needs permissions id-token write
     required: false
     default: ''
+  attest:
+    description: Make a Sigstore build provenance attestation of the release files and send it with the release. Only with trusted publishing from a public repository, and needs permissions attestations write
+    required: false
+    default: 'true'
 outputs:
   status:
     description: published, under_review, rejected or processing
@@ -69,6 +73,24 @@ runs:
         fi
         chmod +x "$binary"
         echo "$folder" >> "$GITHUB_PATH"
+    - id: subjects
+      if: inputs.attest == 'true' && inputs.token == '' && github.event.repository.visibility == 'public'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -uo pipefail
+        checksums="$RUNNER_TEMP/ceagle-checksums"
+        if ceagle checksums > "$checksums"; then
+          echo "file=$checksums" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::ceagle could not list the files to attest, so the release is published without an attestation."
+        fi
+    - id: attest
+      if: steps.subjects.outputs.file != ''
+      continue-on-error: true
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      with:
+        subject-checksums: ${{ steps.subjects.outputs.file }}
     - id: publish
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -77,10 +99,14 @@ runs:
         NOTES: ${{ inputs.notes }}
         API_URL: ${{ inputs.api-url }}
         TOKEN: ${{ inputs.token }}
+        ATTESTATION: ${{ steps.attest.outcome == 'success' && steps.attest.outputs.bundle-path || '' }}
+        ATTEST_OUTCOME: ${{ steps.attest.outcome }}
       run: |
         set -uo pipefail
         arguments=(publish --version "$VERSION" --api "$API_URL")
         if [[ -n "$NOTES" ]]; then arguments+=(--notes "$NOTES"); fi
+        if [[ -n "$ATTESTATION" ]]; then arguments+=(--attestation "$ATTESTATION"); fi
+        if [[ $ATTEST_OUTCOME == failure ]]; then echo "::warning::The attestation could not be made, so the release is published without one. Give the job permissions attestations: write, or set attest: false."; fi
         if [[ -n "$TOKEN" ]]; then export CEAGLE_TOKEN="$TOKEN"; fi
         output="$RUNNER_TEMP/ceagle-output"
         ceagle "${arguments[@]}" | tee "$output"
