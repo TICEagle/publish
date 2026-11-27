@@ -1,0 +1,102 @@
+name: CEagle publish
+description: Publish a release of a TI-84 Plus CE project on CEagle with GitHub trusted publishing
+inputs:
+  version:
+    description: Version to publish, like 1.2.0 or the tag name
+    required: true
+  notes:
+    description: Path to a release notes file, relative to working-directory
+    required: false
+    default: ''
+  working-directory:
+    description: Folder that holds ceagle.toml
+    required: false
+    default: .
+  api-url:
+    description: CEagle server
+    required: false
+    default: https://ceagle.cc
+  cli-version:
+    description: Version of the ceagle CLI to run, one this action has a pinned sha256 for
+    required: false
+    default: 1.0.0
+  token:
+    description: CEagle API token. Leave it empty to use trusted publishing, which needs permissions id-token write
+    required: false
+    default: ''
+outputs:
+  status:
+    description: published, under_review, rejected or processing
+    value: ${{ steps.publish.outputs.status }}
+  url:
+    description: Page of the release on CEagle, set when it was published
+    value: ${{ steps.publish.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+        CHECKSUMS: ${{ github.action_path }}/checksums
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        extension=
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) name=ceagle-linux-x86_64 ;;
+          Linux-ARM64) name=ceagle-linux-aarch64 ;;
+          macOS-X64) name=ceagle-macos-x86_64 ;;
+          macOS-ARM64) name=ceagle-macos-aarch64 ;;
+          Windows-X64) name=ceagle-windows-x86_64.exe extension=.exe ;;
+          *) echo "::error::ceagle has no binary for $RUNNER_OS on $RUNNER_ARCH"; exit 1 ;;
+        esac
+        if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! -f "$CHECKSUMS/$CLI_VERSION" ]]; then
+          echo "::error::this version of TICEagle/publish has no sha256 for ceagle $CLI_VERSION, leave cli-version out to use the one it pins"
+          exit 1
+        fi
+        expected=$(awk -v name="$name" '$2 == name { print $1 }' "$CHECKSUMS/$CLI_VERSION")
+        folder="$RUNNER_TEMP/ceagle-$CLI_VERSION"
+        binary="$folder/ceagle$extension"
+        mkdir -p "$folder"
+        gh release download "v$CLI_VERSION" --repo TICEagle/cli --pattern "$name" --output "$binary" --clobber
+        if command -v sha256sum > /dev/null; then actual=$(sha256sum < "$binary"); else actual=$(shasum -a 256 < "$binary"); fi
+        actual=${actual%% *}
+        if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+          rm -f "$binary"
+          echo "::error::$name of ceagle $CLI_VERSION has sha256 $actual, but this action pins ${expected:-nothing} for it"
+          exit 1
+        fi
+        chmod +x "$binary"
+        echo "$folder" >> "$GITHUB_PATH"
+    - id: publish
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        VERSION: ${{ inputs.version }}
+        NOTES: ${{ inputs.notes }}
+        API_URL: ${{ inputs.api-url }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        set -uo pipefail
+        arguments=(publish --version "$VERSION" --api "$API_URL")
+        if [[ -n "$NOTES" ]]; then arguments+=(--notes "$NOTES"); fi
+        if [[ -n "$TOKEN" ]]; then export CEAGLE_TOKEN="$TOKEN"; fi
+        output="$RUNNER_TEMP/ceagle-output"
+        ceagle "${arguments[@]}" | tee "$output"
+        code=${PIPESTATUS[0]}
+        case $code in
+          0) status=published ;;
+          3) status=under_review ;;
+          4) status=rejected ;;
+          5) status=processing ;;
+          *) exit "$code" ;;
+        esac
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+        url=$(sed -n 's|^Published [^ ]* \([^ ]*\): \(http[^ ]*\)$|\2/\1|p' "$output")
+        if [[ -n "$url" ]]; then echo "url=$url" >> "$GITHUB_OUTPUT"; fi
+        case $status in
+          under_review) echo "::warning::The release is under review. A CEagle admin decides and you get an email." ;;
+          processing) echo "::warning::The release is still processing after 10 minutes. CEagle keeps working on it." ;;
+          rejected) exit "$code" ;;
+        esac
